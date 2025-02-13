@@ -86,7 +86,7 @@ func (f *Future) Await() (any, error) {
 		if err := f.ctx.Err(); err != nil {
 			return nil, err
 		}
-		return nil, context.Canceled // 避免返回 nil, nil
+		return nil, context.Canceled
 	}
 }
 
