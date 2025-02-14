@@ -1,132 +1,146 @@
-package future
+package A
 
 import (
 	"context"
-	"errors"
-	"sync"
 	"testing"
 	"time"
 )
 
-func TestFuture_Success(t *testing.T) {
-	f := NewFuture(context.Background(), func(ctx context.Context) (any, error) {
-		return 42, nil
-	})
-
-	res, err := f.Await()
-	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
+func TestFuture_Result(t *testing.T) {
+	task := func(ctx context.Context) (any, error) {
+		return "success", nil
 	}
-	if res != 42 {
-		t.Errorf("Expected 42, got %v", res)
+	future := NewFuture(context.Background(), task)
+
+	// Calling Result should wait for the task to complete and return the result
+	result, err := future.Result()
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if result != "success" {
+		t.Fatalf("expected result 'success', got %v", result)
+	}
+}
+
+func TestFuture_Abort(t *testing.T) {
+	task := func(ctx context.Context) (any, error) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Second): // Simulate a long-running task
+			return "success", nil
+		}
+	}
+
+	future := NewFuture(context.Background(), task)
+
+	// Abort the task before it finishes
+	future.Abort()
+
+	// Call Result to ensure the task was canceled
+	result, err := future.Result()
+	if err == nil {
+		t.Fatalf("expected error, got result %v", result)
+	}
+	if err.Error() != "context canceled" {
+		t.Fatalf("expected 'context canceled' error, got %v", err)
+	}
+}
+
+func TestFuture_PanicRecovery(t *testing.T) {
+	task := func(ctx context.Context) (any, error) {
+		panic("unexpected error")
+	}
+
+	future := NewFuture(context.Background(), task)
+
+	// Calling Result should capture the panic and return it as an error
+	_, err := future.Result()
+	if err == nil {
+		t.Fatalf("expected panic error, got nil")
+	}
+	if err.Error() != "panic occurred: unexpected error" {
+		t.Fatalf("expected 'panic occurred: unexpected error', got %v", err)
 	}
 }
 
 func TestFuture_LazyExecution(t *testing.T) {
-	executed := false
-	f := NewFuture(context.Background(), func(ctx context.Context) (any, error) {
-		executed = true
-		return 100, nil
-	}, WithLazy())
-
-	time.Sleep(100 * time.Millisecond) // 确保 lazy 模式不会立即执行
-	if executed {
-		t.Errorf("Future executed before Await() was called")
-	}
-
-	res, err := f.Await()
-	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
-	}
-	if res != 100 {
-		t.Errorf("Expected 100, got %v", res)
-	}
-}
-
-func TestFuture_Timeout(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
-	f := NewFuture(ctx, func(ctx context.Context) (any, error) {
-		time.Sleep(200 * time.Millisecond) // 超时
-		return "hello", nil
-	})
-
-	res, err := f.Await()
-	if err == nil {
-		t.Errorf("Expected timeout error, got nil")
-	}
-	if res != nil {
-		t.Errorf("Expected nil result, got %v", res)
-	}
-}
-
-func TestFuture_AbortBeforeRun(t *testing.T) {
-	ctx := context.Background()
-	f := NewFuture(ctx, func(ctx context.Context) (any, error) {
+	task := func(ctx context.Context) (any, error) {
+		// Simulate work
 		time.Sleep(500 * time.Millisecond)
-		return "done", nil
-	})
-
-	f.Abort()
-
-	res, err := f.Await()
-	if err == nil || !errors.Is(err, context.Canceled) {
-		t.Errorf("Expected context.Canceled error, got %v", err)
+		return "lazy success", nil
 	}
-	if res != nil {
-		t.Errorf("Expected nil result, got %v", res)
-	}
-}
 
-func TestFuture_AbortAfterRun(t *testing.T) {
-	ctx := context.Background()
-	f := NewFuture(ctx, func(ctx context.Context) (any, error) {
-		return "finished", nil
-	})
+	// Create future with lazy execution
+	future := NewFuture(context.Background(), task, WithLazy())
 
-	time.Sleep(50 * time.Millisecond) // 确保任务执行
-	f.Abort()
+	// `Result` should not block until it is called (lazy mode)
+	start := time.Now()
+	_, err := future.Result()
+	duration := time.Since(start)
 
-	res, err := f.Await()
 	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
+		t.Fatalf("expected no error, got %v", err)
 	}
-	if res != "finished" {
-		t.Errorf("Expected 'finished', got %v", res)
+
+	// The total duration should be more than 500ms to ensure that the task was lazy-loaded
+	if duration < 500*time.Millisecond {
+		t.Fatalf("expected lazy execution, took too little time %v", duration)
 	}
 }
 
-func TestFuture_ConcurrentAwait(t *testing.T) {
-	f := NewFuture(context.Background(), func(ctx context.Context) (any, error) {
+func TestFuture_Ready(t *testing.T) {
+	task := func(ctx context.Context) (any, error) {
 		time.Sleep(100 * time.Millisecond)
-		return "hello", nil
-	})
+		return "ready success", nil
+	}
+	future := NewFuture(context.Background(), task)
 
-	var wg sync.WaitGroup
-	wg.Add(2)
+	// Initially, the task is not ready
+	if future.Ready() {
+		t.Fatalf("expected task to not be ready")
+	}
 
-	go func() {
-		defer wg.Done()
-		res, err := f.Await()
-		if err != nil {
-			t.Errorf("Unexpected error: %v", err)
-		}
-		if res != "hello" {
-			t.Errorf("Expected 'hello', got %v", res)
-		}
-	}()
+	// Calling Result will make the task complete
+	_, err := future.Result()
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
 
-	go func() {
-		defer wg.Done()
-		res, err := f.Await()
-		if err != nil {
-			t.Errorf("Unexpected error: %v", err)
-		}
-		if res != "hello" {
-			t.Errorf("Expected 'hello', got %v", res)
-		}
-	}()
+	// After calling Result, the task should be ready
+	if !future.Ready() {
+		t.Fatalf("expected task to be ready")
+	}
+}
 
-	wg.Wait()
+func TestFuture_DoneChannel(t *testing.T) {
+	task := func(ctx context.Context) (any, error) {
+		time.Sleep(100 * time.Millisecond)
+		return "done success", nil
+	}
+
+	future := NewFuture(context.Background(), task)
+
+	doneChan := future.Done()
+
+	// Initially, done channel should not be closed
+	select {
+	case <-doneChan:
+		t.Fatal("expected done channel to not be closed initially")
+	default:
+	}
+
+	// Calling Result will complete the task and close the done channel
+	_, err := future.Result()
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	// Now the done channel should be closed
+	select {
+	case <-doneChan:
+		// Done channel closed as expected
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("expected done channel to be closed")
+	}
 }

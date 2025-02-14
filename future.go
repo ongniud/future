@@ -1,9 +1,9 @@
-package future
+package A
 
 import (
 	"context"
+	"fmt"
 	"sync"
-	"sync/atomic"
 )
 
 // Option defines functional options for Future.
@@ -16,86 +16,102 @@ func WithLazy() Option {
 	}
 }
 
-// Future represents an asynchronous computation.
 type Future struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	promise func(ctx context.Context) (any, error)
-
-	// options
+	task func(context.Context) (any, error)
 	lazy bool
 
-	// result
-	done chan struct{}
-	res  atomic.Value
-	err  atomic.Value
-	once sync.Once
+	item interface{}
+	err  error
+
+	ctx    context.Context
+	cancel context.CancelFunc
+	mu     sync.Mutex
+	once   sync.Once
+	closed sync.Once
+	done   chan struct{}
 }
 
-// NewFuture creates a new Future.
-func NewFuture(ctx context.Context, promise func(context.Context) (any, error), opts ...Option) *Future {
-	newCtx, cancel := context.WithCancel(ctx)
-	f := &Future{
-		ctx:     newCtx,
-		cancel:  cancel,
-		promise: promise,
-		done:    make(chan struct{}),
-	}
+// Result waits for the result to be ready and returns it.
+func (f *Future) Result() (interface{}, error) {
+	f.once.Do(f.start)
+	<-f.done
 
-	// Apply options
-	for _, opt := range opts {
-		opt(f)
-	}
-
-	// Start execution if not lazy
-	if !f.lazy {
-		go f.run()
-	}
-
-	return f
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.item, f.err
 }
 
-// run executes the promise and stores the result.
-func (f *Future) run() {
-	f.once.Do(func() {
-		res, err := f.promise(f.ctx)
-		if res != nil {
-			f.res.Store(res)
-		}
-		if err != nil {
-			f.err.Store(err)
-		}
-		close(f.done) // Ensure this is called only once
-	})
-}
-
-// Await waits for the Future to complete and returns the result.
-func (f *Future) Await() (any, error) {
-	// Trigger execution for lazy mode
-	if f.lazy {
-		go f.run()
-	}
-
-	// Wait for completion or context cancellation
+// Ready returns true if the result is available.
+func (f *Future) Ready() bool {
 	select {
 	case <-f.done:
-		res := f.res.Load()
-		err, _ := f.err.Load().(error)
-		return res, err
-	case <-f.ctx.Done():
-		if err := f.ctx.Err(); err != nil {
-			return nil, err
-		}
-		return nil, context.Canceled
+		return true
+	default:
+		return false
 	}
 }
 
-// Done returns a channel that is closed when the Future completes.
+// Done returns a channel that is closed when the result is ready.
 func (f *Future) Done() <-chan struct{} {
 	return f.done
 }
 
-// Abort cancels the Future.
+// NewFuture creates a new Future.
+func NewFuture(ctx context.Context, task func(context.Context) (any, error), opts ...Option) *Future {
+	newCtx, cancel := context.WithCancel(ctx)
+	f := &Future{
+		ctx:    newCtx,
+		cancel: cancel,
+		task:   task,
+		done:   make(chan struct{}),
+	}
+	for _, opt := range opts {
+		opt(f)
+	}
+	if !f.lazy {
+		f.once.Do(f.start)
+	}
+	return f
+}
+
+// start executes the task and stores the result.
+func (f *Future) start() {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				f.mu.Lock()
+				f.err = fmt.Errorf("panic occurred: %v", r)
+				f.mu.Unlock()
+				f.markDone()
+			}
+		}()
+		res, err := f.task(f.ctx)
+		f.mu.Lock()
+		f.item, f.err = res, err
+		f.mu.Unlock()
+		f.markDone()
+	}()
+}
+
+// Abort cancels the task execution.
 func (f *Future) Abort() {
-	f.cancel()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	select {
+	case <-f.done:
+		return
+	default:
+		if f.cancel != nil {
+			f.cancel()
+		}
+		f.item, f.err = nil, context.Canceled
+		f.markDone()
+	}
+}
+
+// markDone marks the future as done and closes the done channel.
+func (f *Future) markDone() {
+	f.closed.Do(func() {
+		close(f.done)
+	})
 }

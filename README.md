@@ -1,216 +1,135 @@
+# Future
 
-# Future Package
-
-`Future` is a Go package for asynchronous computation. It allows you to initiate an asynchronous task and retrieve its result later. `Future` supports lazy execution mode and task cancellation.
+The Future package provides a simple and efficient way to handle asynchronous computations in Go. It allows you to execute tasks concurrently, retrieve their results, and cancel them if needed. The package supports lazy execution, panic recovery, and context-based cancellation.
 
 ## Features
 
-- **Asynchronous Computation**: Initiates asynchronous tasks and allows retrieving results when needed.
-- **Lazy Execution Mode**: Supports lazy execution where the task is only run when `Await` is called for the first time.
-- **Task Cancellation**: Allows cancelling tasks using the `Abort` method.
-- **Thread Safety**: Ensures thread safety using `sync.Once` and `atomic.Value`.
+- **Asynchronous Execution:** Execute tasks concurrently and retrieve their results when needed.
+- **Lazy Execution:** Delay task execution until the result is explicitly requested.
+- **Task Cancellation:** Cancel tasks manually using the `Abort()` method.
+- **Panic Recovery:** Automatically recover from panics in tasks and return them as errors.
+- **Thread Safety:** Safe for concurrent use with proper synchronization.
 
 ## Installation
 
-Install the package using `go get`:
+To use the Future package, simply import it in your Go project:
 
-```bash
-go get github.com/ongniud/future
+```go
+import "github.com/ongniud/future"
 ```
 
 ## Usage
 
 ### Creating a Future
 
-To create a new Future, use the `NewFuture` function:
+Use the `NewFuture` function to create a new Future:
 
 ```go
-f := future.NewFuture(ctx, promiseFunc, future.WithLazy())
+task := func(ctx context.Context) (any, error) {
+    // Simulate a long-running task
+    time.Sleep(100 * time.Millisecond)
+    return "task completed", nil
+}
+
+f := A.NewFuture(context.Background(), task)
 ```
 
-You can pass in a context, a promise function, and options like `WithLazy` to control the execution behavior.
+### Retrieving the Result
 
-### Waiting for the Future to Complete
-
-To wait for the Future to complete and retrieve the result, use the `Await` method:
+Use the `Result()` method to wait for the task to complete and retrieve its result:
 
 ```go
-result, err := f.Await()
+res, err := f.Result()
+if err != nil {
+    fmt.Println("Error:", err)
+} else {
+    fmt.Println("Result:", res)
+}
 ```
 
-This method will block until the Future completes or the context is canceled.
+### Lazy Execution
 
-### Cancelling the Future
+To enable lazy execution, use the `WithLazy` option:
 
-To cancel the Future, use the `Abort` method:
+```go
+f := A.NewFuture(context.Background(), task, A.WithLazy())
+```
+
+In lazy mode, the task will only start when `Result()` is called.
+
+### Canceling a Task
+
+Use the `Abort()` method to cancel a task:
 
 ```go
 f.Abort()
 ```
 
-This will cancel the Future and stop its execution.
+If the task is canceled, `Result()` will return a `context.Canceled` error.
 
-### Handling Completion
+### Checking Task Status
 
-You can also use the `Done` method to get a channel that is closed when the Future completes.
+Use the `Ready()` method to check if the task has completed:
+
+```go
+if f.Ready() {
+    fmt.Println("Task is ready")
+} else {
+    fmt.Println("Task is still running")
+}
+```
+
+### Waiting for Completion
+
+Use the `Done()` method to get a channel that is closed when the task completes:
 
 ```go
 <-f.Done()
+fmt.Println("Task is done")
 ```
 
-## Example
-### Basic
+### Example
+
+Here is a complete example demonstrating the usage of the Future package:
 
 ```go
 package main
 
 import (
-	"context"
-	"fmt"
-	"time"
+    "context"
+    "fmt"
+    "time"
 
-	"github.com/ongniud/future"
+    "github.com/ongniud/future"
 )
 
 func main() {
-	ctx := context.Background()
-	promise := func(ctx context.Context) (any, error) {
-		time.Sleep(2 * time.Second)
-		return "Hello, Future!", nil
-	}
+    task := func(ctx context.Context) (any, error) {
+        select {
+        case <-ctx.Done():
+            return nil, ctx.Err()
+        case <-time.After(200 * time.Millisecond):
+            return "task completed", nil
+        }
+    }
 
-	// Create Future
-	f := future.NewFuture(ctx, promise)
+    f := A.NewFuture(context.Background(), task)
 
-	// Retrieve result
-	res, err := f.Await()
-	if err != nil {
-		fmt.Println("Error:", err)
-	} else {
-		fmt.Println("Result:", res.(string)) // Output: Result: Hello, Future!
-	}
+    // Simulate cancellation after 100ms
+    go func() {
+        time.Sleep(100 * time.Millisecond)
+        f.Abort()
+    }()
+
+    // Wait for the result
+    res, err := f.Result()
+    if err != nil {
+        fmt.Println("Error:", err)
+    } else {
+        fmt.Println("Result:", res)
+    }
 }
 ```
-### Lazy Execution Mode
-```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"time"
-
-	"github.com/ongniud/future"
-)
-
-func main() {
-	ctx := context.Background()
-	promise := func(ctx context.Context) (any, error) {
-		time.Sleep(2 * time.Second)
-		return "Lazy Result", nil
-	}
-
-	// Create Future in lazy execution mode
-	f := future.NewFuture(ctx, promise, future.WithLazy())
-
-	// Retrieve result (task will execute at this point)
-	res, err := f.Await()
-	if err != nil {
-		fmt.Println("Error:", err)
-	} else {
-		fmt.Println("Result:", res.(string)) // Output: Result: Lazy Result
-	}
-}
-```
-### Task Cancellation
-
-```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"time"
-
-	"github.com/ongniud/future"
-)
-
-func main() {
-	ctx := context.Background()
-	promise := func(ctx context.Context) (any, error) {
-		time.Sleep(5 * time.Second)
-		return "This will not be reached", nil
-	}
-
-	// Create Future
-	f := future.NewFuture(ctx, promise)
-
-	// Cancel the task after 1 second
-	go func() {
-		time.Sleep(1 * time.Second)
-		f.Abort()
-	}()
-
-	// Retrieve result
-	res, err := f.Await()
-	if err != nil {
-		fmt.Println("Error:", err) // Output: Error: context canceled
-	} else {
-		fmt.Println("Result:", res)
-	}
-}
-
-```
-
-## API Documentation
-### NewFuture
-
-```go 
-func NewFuture(ctx context.Context, promise func(context.Context) (any, error), opts ...Option) *Future
-```
-
-Creates a new Future instance.
-- ctx: Context used for task cancellation and timeouts.
-- promise: The asynchronous task function.
-- opts: Optional parameters like WithLazy.
-
-### WithLazy
-
-```go
-func WithLazy() Option
-```
-
-Enables lazy execution mode. The task will execute only when Await is called for the first time.
-
-### Await
-```go
-func (f *Future) Await() (any, error)
-```
-
-Waits for the task to complete and returns the result. If the task has not been started (lazy mode), it will trigger the task.
-
-### Done
-
-```go
-func (f *Future) Done() <-chan struct{}
-```
-
-Returns a channel that will be closed when the task completes.
-
-### Abort
-
-```go
-func (f *Future) Abort()
-```
-Cancels the task.
-
-## Design Details
-- Thread Safety: Uses sync.Once to ensure the task is executed only once, and atomic.Value to store the result and error.
-- Lazy Execution Mode: Enabled through the WithLazy option, the task is started when Await is called for the first time.
-- Task Cancellation: Task cancellation is implemented through context.Context.
-
-## Contribution
-Feel free to submit issues and pull requests! Please ensure code style consistency and passing tests.
-
 ## License
-This project is licensed under the MIT License.
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
