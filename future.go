@@ -31,6 +31,24 @@ type Future struct {
 	done   chan struct{}
 }
 
+// NewFuture creates a new Future.
+func NewFuture(ctx context.Context, task func(context.Context) (any, error), opts ...Option) *Future {
+	newCtx, cancel := context.WithCancel(ctx)
+	f := &Future{
+		ctx:    newCtx,
+		cancel: cancel,
+		task:   task,
+		done:   make(chan struct{}),
+	}
+	for _, opt := range opts {
+		opt(f)
+	}
+	if !f.lazy {
+		f.once.Do(f.start)
+	}
+	return f
+}
+
 // Result waits for the result to be ready and returns it.
 func (f *Future) Result() (interface{}, error) {
 	f.once.Do(f.start)
@@ -56,22 +74,20 @@ func (f *Future) Done() <-chan struct{} {
 	return f.done
 }
 
-// NewFuture creates a new Future.
-func NewFuture(ctx context.Context, task func(context.Context) (any, error), opts ...Option) *Future {
-	newCtx, cancel := context.WithCancel(ctx)
-	f := &Future{
-		ctx:    newCtx,
-		cancel: cancel,
-		task:   task,
-		done:   make(chan struct{}),
+// Abort cancels the task execution.
+func (f *Future) Abort() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	select {
+	case <-f.done:
+		return
+	default:
+		if f.cancel != nil {
+			f.cancel()
+		}
+		f.item, f.err = nil, context.Canceled
+		f.markDone()
 	}
-	for _, opt := range opts {
-		opt(f)
-	}
-	if !f.lazy {
-		f.once.Do(f.start)
-	}
-	return f
 }
 
 // start executes the task and stores the result.
@@ -91,22 +107,6 @@ func (f *Future) start() {
 		f.mu.Unlock()
 		f.markDone()
 	}()
-}
-
-// Abort cancels the task execution.
-func (f *Future) Abort() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	select {
-	case <-f.done:
-		return
-	default:
-		if f.cancel != nil {
-			f.cancel()
-		}
-		f.item, f.err = nil, context.Canceled
-		f.markDone()
-	}
 }
 
 // markDone marks the future as done and closes the done channel.
