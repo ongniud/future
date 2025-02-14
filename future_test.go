@@ -47,7 +47,7 @@ func TestFuture_Abort(t *testing.T) {
 	}
 }
 
-func TestFuture_PanicRecovery(t *testing.T) {
+func TestFuture_Panic(t *testing.T) {
 	task := func(ctx context.Context) (any, error) {
 		panic("unexpected error")
 	}
@@ -64,7 +64,7 @@ func TestFuture_PanicRecovery(t *testing.T) {
 	}
 }
 
-func TestFuture_LazyExecution(t *testing.T) {
+func TestFuture_Lazy(t *testing.T) {
 	task := func(ctx context.Context) (any, error) {
 		// Simulate work
 		time.Sleep(500 * time.Millisecond)
@@ -113,7 +113,7 @@ func TestFuture_Ready(t *testing.T) {
 	}
 }
 
-func TestFuture_DoneChannel(t *testing.T) {
+func TestFuture_Don(t *testing.T) {
 	task := func(ctx context.Context) (any, error) {
 		time.Sleep(100 * time.Millisecond)
 		return "done success", nil
@@ -121,11 +121,11 @@ func TestFuture_DoneChannel(t *testing.T) {
 
 	future := NewFuture(context.Background(), task)
 
-	doneChan := future.Done()
+	done := future.Done()
 
 	// Initially, done channel should not be closed
 	select {
-	case <-doneChan:
+	case <-done:
 		t.Fatal("expected done channel to not be closed initially")
 	default:
 	}
@@ -138,7 +138,7 @@ func TestFuture_DoneChannel(t *testing.T) {
 
 	// Now the done channel should be closed
 	select {
-	case <-doneChan:
+	case <-done:
 		// Done channel closed as expected
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("expected done channel to be closed")
